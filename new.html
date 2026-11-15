@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>My Cookie 海岛小屋</title>
+<style>
+  body { margin: 0; overflow: hidden; background: #87ceeb; touch-action: none; font-family: -apple-system, sans-serif; }
+  #ui { position: fixed; top: 20px; left: 20px; color: #fff; font-size: 14px; background: rgba(255,255,255,0.2); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); padding: 10px 15px; border-radius: 15px; border: 1px solid rgba(255,255,255,0.3); pointer-events: none; z-index: 10;}
+  #joystick { position: fixed; bottom: 40px; left: 40px; width: 110px; height: 110px; background: rgba(255,255,255,0.2); backdrop-filter: blur(5px); -webkit-backdrop-filter: blur(5px); border-radius: 50%; z-index: 10; border: 2px solid rgba(255,255,255,0.6); }
+  #stick { position: absolute; top: 30px; left: 30px; width: 50px; height: 50px; background: rgba(255,255,255,0.9); border-radius: 50%; pointer-events: none; box-shadow: 0 4px 10px rgba(0,0,0,0.2); }
+  
+  /* 高级按钮样式 */
+  #upload-btn { position: fixed; top: 20px; right: 20px; z-index: 20; background: rgba(255, 105, 180, 0.8); color: white; border: 2px solid rgba(255,255,255,0.8); padding: 10px 18px; border-radius: 25px; font-weight: bold; font-size: 15px; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); box-shadow: 0 4px 15px rgba(255,105,180,0.4); cursor: pointer; }
+  #upload-btn:active { transform: scale(0.95); background: rgba(255, 105, 180, 1); }
+  #file-input { display: none; }
+  
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<div id="ui">
+  <b>操作说明：</b><br>
+  左下滑动：走路 (有碰撞)<br>
+  右半屏滑动：转头看四周
+</div>
+
+<button id="upload-btn">📷 换照片</button>
+<input type="file" id="file-input" accept="image/*">
+
+<div id="joystick"><div id="stick"></div></div>
+
+<script src="https://cdn.staticfile.org/three.js/0.160.0/three.min.js"></script>
+
+<script>
+// ================= 基础场景 =================
+const scene = new THREE.Scene();
+// 天空渐变蓝
+scene.background = new THREE.Color(0x87ceeb);
+scene.fog = new THREE.Fog(0x87ceeb, 20, 80);
+
+const camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.1, 200);
+camera.position.set(0, 1.6, 14); // 站在海滩上看房子
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+document.body.appendChild(renderer.domElement);
+
+// ================= 灯光 =================
+scene.add(new THREE.AmbientLight(0xffffff, 0.8));
+const sun = new THREE.DirectionalLight(0xffffff, 1.5);
+sun.position.set(15, 20, 15);
+sun.castShadow = true;
+sun.shadow.camera.top = 20;
+sun.shadow.camera.bottom = -20;
+sun.shadow.camera.left = -20;
+sun.shadow.camera.right = 20;
+scene.add(sun);
+
+// ================= 海岛地形 =================
+// 沙滩
+const sand = new THREE.Mesh(
+  new THREE.CircleGeometry(60, 32),
+  new THREE.MeshStandardMaterial({ color: 0xf4d03f, roughness: 1 })
+);
+sand.rotation.x = -Math.PI / 2;
+sand.receiveShadow = true;
+scene.add(sand);
+
+// 海水 (透明的蓝色大圆环包围沙滩)
+const waterGeo = new THREE.RingGeometry(40, 100, 64);
+const waterMat = new THREE.MeshStandardMaterial({ color: 0x2980b9, transparent: true, opacity: 0.8 });
+const water = new THREE.Mesh(waterGeo, waterMat);
+water.rotation.x = -Math.PI / 2;
+water.position.y = -0.1;
+scene.add(water);
+
+// ================= 建白色小屋 =================
+const house = new THREE.Group();
+scene.add(house);
+
+const W = 6, H = 3, D = 6;
+
+// 木地板
+const floor = new THREE.Mesh(
+  new THREE.PlaneGeometry(W, D),
+  new THREE.MeshStandardMaterial({ color: 0xdeb887 })
+);
+floor.rotation.x = -Math.PI / 2;
+floor.receiveShadow = true;
+house.add(floor);
+
+// 白色墙体材质（双面）
+const wallMat = new THREE.MeshStandardMaterial({ color: 0xffffff, side: THREE.DoubleSide });
+const glassMat = new THREE.MeshStandardMaterial({ color: 0x9fd8ef, transparent: true, opacity: 0.6 });
+
+function createWall(width, height, x, y, z, rotY, hasWindow) {
+  const wallGroup = new THREE.Group();
+  if (!hasWindow) {
+    const wall = new THREE.Mesh(new THREE.BoxGeometry(width, height, 0.2), wallMat);
+    wall.position.set(0, height/2, 0);
+    wall.castShadow = true; wall.receiveShadow = true;
+    wallGroup.add(wall);
+  } else {
+    const ww = 2, wh = 1.2;
+    const sideW = (width - ww) / 2;
+    const left = new THREE.Mesh(new THREE.BoxGeometry(sideW, height, 0.2), wallMat);
+    left.position.set(-width/2 + sideW/2, height/2, 0);
+    left.castShadow = true; left.receiveShadow = true; wallGroup.add(left);
+    const right = new THREE.Mesh(new THREE.BoxGeometry(sideW, height, 0.2), wallMat);
+    right.position.set(width/2 - sideW/2, height/2, 0);
+    right.castShadow = true; right.receiveShadow = true; wallGroup.add(right);
+    const top = new THREE.Mesh(new THREE.BoxGeometry(ww, height - wh - 0.8, 0.2), wallMat);
+    top.position.set(0, height - (height - wh - 0.8)/2, 0);
+    top.castShadow = true; top.receiveShadow = true; wallGroup.add(top);
+    const bottom = new THREE.Mesh(new THREE.BoxGeometry(ww, 0.8, 0.2), wallMat);
+    bottom.position.set(0, 0.4, 0);
+    bottom.castShadow = true; bottom.receiveShadow = true; wallGroup.add(bottom);
+    const glass = new THREE.Mesh(new THREE.BoxGeometry(ww, wh, 0.05), glassMat);
+    glass.position.set(0, 1.4, 0);
+    wallGroup.add(glass);
+  }
+  wallGroup.position.set(x, y, z);
+  wallGroup.rotation.y = rotY;
+  house.add(wallGroup);
+}
+
+// 白墙与窗户
+createWall(W, H, 0, 0, -D/2, 0, false); // 后墙
+createWall(D, H, -W/2, 0, 0, Math.PI/2, true); // 左墙
+createWall(D, H, W/2, 0, 0, Math.PI/2, true); // 右墙
+
+// 前墙与门（门的宽度1.5，留给玩家进出）
+const frontW = W, frontH = H, doorW = 1.5, doorH = 2.2;
+const fLeft = new THREE.Mesh(new THREE.BoxGeometry((frontW-doorW)/2, frontH, 0.2), wallMat);
+fLeft.position.set(-frontW/2 + (frontW-doorW)/4, frontH/2, D/2);
+fLeft.castShadow = true; fLeft.receiveShadow = true; house.add(fLeft);
+
+const fRight = new THREE.Mesh(new THREE.BoxGeometry((frontW-doorW)/2, frontH, 0.2), wallMat);
+fRight.position.set(frontW/2 - (frontW-doorW)/4, frontH/2, D/2);
+fRight.castShadow = true; fRight.receiveShadow = true; house.add(fRight);
+
+const fTop = new THREE.Mesh(new THREE.BoxGeometry(doorW, frontH-doorH, 0.2), wallMat);
+fTop.position.set(0, frontH - (frontH-doorH)/2, D/2);
+fTop.castShadow = true; fTop.receiveShadow = true; house.add(fTop);
+
+// 蓝色屋顶
+const roof = new THREE.Mesh(
+  new THREE.ConeGeometry(W * 0.75, 2, 4), 
+  new THREE.MeshStandardMaterial({ color: 0x5dade2 })
+);
+roof.position.y = H + 1;
+roof.rotation.y = Math.PI / 4;
+roof.castShadow = true;
+house.add(roof);
+
+// ================= 照片逻辑 =================
+// 预设的照片占位符（如果用户还没上传，显示一个粉色默认框）
+let photoTexture = null;
+const pictureMat = new THREE.MeshStandardMaterial({ color: 0xffb6c1 });
+const picture = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 2.2), pictureMat); // 照片比例
+picture.position.set(0, 1.8, -2.85); // 贴在后墙中心偏上
+picture.castShadow = true;
+house.add(picture);
+
+// 处理用户上传照片
+const fileInput = document.getElementById('file-input');
+document.getElementById('upload-btn').addEventListener('click', () => {
+  fileInput.click();
+});
+
+fileInput.addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (file) {
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const img = new Image();
+      img.onload = () => {
+        const texture = new THREE.Texture(img);
+        texture.needsUpdate = true;
+        picture.material.map = texture;
+        picture.material.color.set(0xffffff); // 去掉占位颜色
+        picture.material.needsUpdate = true;
+      };
+      img.src = event.target.result;
+    };
+    reader.readAsDataURL(file);
+  }
+});
+
+// ================= 可爱的 3D 文字 "my cookie" =================
+// 用 Canvas 画文字贴到 3D 平面上
+function createTextTexture(text) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 512;
+  canvas.height = 128;
+  const ctx = canvas.getContext('2d');
+  ctx.font = "bold 70px 'Comic Sans MS', cursive, sans-serif"; // 可爱字体
+  ctx.fillStyle = "#ff69b4"; // 粉红色
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(text, 256, 64);
+  const texture = new THREE.CanvasTexture(canvas);
+  return texture;
+}
+const textMat = new THREE.MeshBasicMaterial({ 
+  map: createTextTexture("my cookie ✨"), 
+  transparent: true,
+  side: THREE.DoubleSide
+});
+const textMesh = new THREE.Mesh(new THREE.PlaneGeometry(3, 0.75), textMat);
+textMesh.position.set(0, 3.8, D/2 + 0.1); // 贴在门框上面
+house.add(textMesh);
+
+
+// ================= 海滩椰子树 =================
+function addPalmTree(x, z) {
+  const tree = new THREE.Group();
+  // 树干
+  const trunk = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.15, 0.3, 4, 8),
+    new THREE.MeshStandardMaterial({ color: 0x8b5a2b })
+  );
+  trunk.position.y = 2;
+  trunk.castShadow = true;
+  // 稍微倾斜一点
+  trunk.rotation.z = (Math.random() - 0.5) * 0.2;
+  tree.add(trunk);
+  
+  // 椰子叶（用几个压扁的圆锥组合）
+  const leafMat = new THREE.MeshStandardMaterial({ color: 0x2e8b57, side: THREE.DoubleSide });
+  for(let i=0; i<5; i++) {
+    const leaf = new THREE.Mesh(new THREE.ConeGeometry(1.5, 0.2, 4), leafMat);
+    leaf.position.y = 4;
+    leaf.rotation.y = (i * Math.PI * 2) / 5;
+    leaf.rotation.x = Math.PI / 4; // 垂下来
+    leaf.castShadow = true;
+    tree.add(leaf);
+  }
+  
+  tree.position.set(x, 0, z);
+  scene.add(tree);
+}
+addPalmTree(-8, -5);
+addPalmTree(9, -6);
+addPalmTree(10, 8);
+addPalmTree(-11, 6);
+addPalmTree(-15, -10);
+
+// ================= 第一人称控制与物理碰撞 =================
+let move = { forward: 0, right: 0 };
+let look = { x: 0, y: 0 };
+const rotationSpeed = 0.005;
+const speed = 4.0;
+const clock = new THREE.Clock();
+
+// 视角滑动
+let isLooking = false;
+let lastTouchX = 0, lastTouchY = 0;
+renderer.domElement.addEventListener('touchstart', (e) => {
+  for (let i = 0; i < e.touches.length; i++) {
+    if (e.touches[i].clientX > window.innerWidth / 2) {
+      isLooking = true;
+      lastTouchX = e.touches[i].clientX;
+      lastTouchY = e.touches[i].clientY;
+    }
+  }
+});
+renderer.domElement.addEventListener('touchmove', (e) => {
+  if (isLooking) {
+    for (let i = 0; i < e.touches.length; i++) {
+      if (e.touches[i].clientX > window.innerWidth / 2) {
+        let dx = e.touches[i].clientX - lastTouchX;
+        let dy = e.touches[i].clientY - lastTouchY;
+        look.y -= dx * rotationSpeed;
+        look.x -= dy * rotationSpeed;
+        look.x = Math.max(-Math.PI/2.5, Math.min(Math.PI/2.5, look.x));
+        lastTouchX = e.touches[i].clientX;
+        lastTouchY = e.touches[i].clientY;
+      }
+    }
+  }
+});
+renderer.domElement.addEventListener('touchend', () => { isLooking = false; });
+
+// 摇杆滑动
+const joystick = document.getElementById('joystick');
+const stick = document.getElementById('stick');
+let joystickActive = false;
+let joystickCenter = { x: 0, y: 0 };
+joystick.addEventListener('touchstart', (e) => {
+  e.preventDefault();
+  joystickActive = true;
+  const rect = joystick.getBoundingClientRect();
+  joystickCenter = { x: rect.left + rect.width/2, y: rect.top + rect.height/2 };
+});
+joystick.addEventListener('touchmove', (e) => {
+  if (!joystickActive) return;
+  e.preventDefault();
+  const touch = e.touches[0];
+  let dx = touch.clientX - joystickCenter.x;
+  let dy = touch.clientY - joystickCenter.y;
+  const maxDist = 35;
+  const dist = Math.sqrt(dx*dx + dy*dy);
+  if (dist > maxDist) { dx = (dx / dist) * maxDist; dy = (dy / dist) * maxDist; }
+  stick.style.transform = `translate(${dx}px, ${dy}px)`;
+  move.right = dx / maxDist;
+  move.forward = -dy / maxDist;
+});
+joystick.addEventListener('touchend', () => {
+  joystickActive = false;
+  stick.style.transform = `translate(0px, 0px)`;
+  move.forward = 0; move.right = 0;
+});
+
+// 简单的矩形碰撞检测 (AABB)
+// 判断点 (x, z) 是否在墙体里面（留出 0.4 的安全距离，防止卡边）
+function checkCollision(x, z) {
+  const buffer = 0.35; // 玩家体积半径
+  // 门洞区域（前墙 z = 3 处，x 在 -0.75 到 0.75 之间是门，不碰撞）
+  const isAtDoor = (z > D/2 - buffer && z < D/2 + buffer) && (x > -doorW/2 + buffer && x < doorW/2 - buffer);
+
+  // 检查是否在房屋墙壁的厚度范围内
+  // 左墙: x = -3, 右墙 x = 3, 后墙 z = -3, 前墙 z = 3
+  const hitLeft  = (x < -W/2 + buffer && x > -W/2 - buffer) && (z > -D/2 && z < D/2);
+  const hitRight = (x > W/2 - buffer && x < W/2 + buffer) && (z > -D/2 && z < D/2);
+  const hitBack  = (z < -D/2 + buffer && z > -D/2 - buffer) && (x > -W/2 && x < W/2);
+  const hitFront = (z > D/2 - buffer && z < D/2 + buffer) && (x > -W/2 && x < W/2) && !isAtDoor;
+
+  if (hitLeft || hitRight || hitBack || hitFront) {
+    return true; // 发生碰撞
+  }
+  return false;
+}
+
+// 主循环
+function animate() {
+  requestAnimationFrame(animate);
+  const dt = clock.getDelta();
+  const actualSpeed = speed * dt;
+
+  camera.rotation.order = 'YXZ';
+  camera.rotation.y = look.y;
+  camera.rotation.x = look.x;
+
+  if (move.forward !== 0 || move.right !== 0) {
+    let forwardVec = new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0, 1, 0), look.y);
+    let rightVec = new THREE.Vector3(1, 0, 0).applyAxisAngle(new THREE.Vector3(0, 1, 0), look.y);
+    
+    let finalMove = new THREE.Vector3();
+    finalMove.addScaledVector(forwardVec, move.forward * actualSpeed);
+    finalMove.addScaledVector(rightVec, move.right * actualSpeed);
+    
+    let newX = camera.position.x + finalMove.x;
+    let newZ = camera.position.z + finalMove.z;
+
+    // 限制不能走进海里
+    const distFromCenter = Math.sqrt(newX*newX + newZ*newZ);
+    if (distFromCenter < 38) {
+      // 分别判断 X 和 Z 轴的碰撞，实现“沿着墙滑行”的效果
+      if (!checkCollision(newX, camera.position.z)) {
+        camera.position.x = newX;
+      }
+      if (!checkCollision(camera.position.x, newZ)) {
+        camera.position.z = newZ;
+      }
+    }
+  }
+
+  // 让墙上的照片有一点点呼吸的浮动效果
+  if(picture.material.map) {
+    picture.position.y = 1.8 + Math.sin(Date.now() * 0.002) * 0.02;
+  }
+
+  renderer.render(scene, camera);
+}
+
+look.x = -0.05;
+look.y = 0;
+animate();
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+</script>
+</body>
+</html>
